@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="theme-color" content="#0b1020"><title>DAFAN AI AGENT</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef3ff;font-family:system-ui,Tahoma,Arial}
+.app{max-width:900px;margin:auto;height:100dvh;display:flex;flex-direction:column;padding:12px;gap:10px}
+header,.panel{background:#141d30;border:1px solid #2a3853;border-radius:16px;padding:13px}
+h1{margin:0;color:#5ce1b5;font-size:22px}.muted{color:#9babc4;font-size:12px}
+#status{font-size:13px;color:#b7c6dd;padding:5px}
+#agents{display:flex;gap:7px;flex-wrap:wrap}.agent{font-size:12px;background:#20304a;border:1px solid #344866;border-radius:20px;padding:7px 10px}
+#log{flex:1;overflow:auto;background:#10182a;border:1px solid #293750;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:9px}
+.msg{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;padding:11px 13px;border-radius:13px;max-width:95%}.user{align-self:flex-start;background:#1d4943}.bot{align-self:flex-end;background:#19253a;border:1px solid #2d3c57}
+.row{display:flex;gap:7px}.row>*{min-width:0}input,textarea{background:#111a2b;color:#fff;border:1px solid #34445f;border-radius:11px;padding:11px;font:inherit;width:100%}
+textarea{resize:vertical;min-height:50px;max-height:120px}button{border:0;border-radius:11px;background:#5ce1b5;color:#07150f;font-weight:800;padding:11px 14px}button:disabled{opacity:.45}
+.secondary{background:#273750;color:#eef3ff}.grow{flex:1}.tiny{font-size:11px;color:#9babc4}
+</style></head>
+<body><main class="app">
+<header><h1>DAFAN AI AGENT</h1><div class="muted">وكلاء مستقلون • نموذج يعمل على الجهاز • دون API</div></header>
+<section class="panel">
+ <div class="row"><button id="load" class="grow">تحميل نموذج الذكاء</button><span id="pct" class="tiny">0%</span></div>
+ <div id="status">يحتاج تنزيل النموذج أول مرة. بعد اكتمال التنزيل، يمكن تشغيله دون إنترنت إذا بقيت الملفات مخزنة.</div>
+ <div id="agents"><span class="agent">المساعد العام</span><span class="agent">فاحص المواقع</span><span class="agent">المحلل</span></div>
+</section>
+<div id="log"><div class="msg bot">مرحباً! حمّل النموذج أولاً. يمكنك سؤالي أو إعطائي رابط موقع لفحص محتواه.</div></div>
+<section class="panel">
+ <div class="row"><input id="url" class="grow" placeholder="رابط الموقع المراد فحصه https://..."><button id="scan" class="secondary">افحص</button></div>
+ <div class="row" style="margin-top:8px"><textarea id="prompt" class="grow" placeholder="اكتب أمرك أو سؤالك..."></textarea><button id="send">إرسال</button></div>
+ <div class="row" style="margin-top:7px"><button id="clear" class="secondary">مسح المحادثة</button><span class="tiny">عدد الوكلاء قابل للتعديل من AGENT_CONFIG داخل الكود.</span></div>
+</section>
+</main>
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1";
+env.useBrowserCache = true;
+env.allowRemoteModels = true;
+env.backends.onnx.wasm.numThreads = 1;
+env.backends.onnx.wasm.proxy = false;
+
+// غيّر هذه القائمة لإضافة/حذف وكلاء. جميعهم يتشاركون النموذج لتقليل استهلاك RAM.
+const AGENT_CONFIG = [
+ {name:"المساعد العام", instruction:"أنت مساعد عام مفيد. أجب بوضوح وبالعربية."},
+ {name:"فاحص المواقع", instruction:"أنت محلل مواقع. حلل النص المستخرج من الصفحة، واذكر وظيفة الموقع ومحتواه ومؤشرات الأخطاء أو المخاطر الظاهرة. لا تدّع فحص أشياء لم تظهر في النص."},
+ {name:"المحلل", instruction:"حلل طلب المستخدم خطوة بخطوة، وقدّم نتيجة عملية مختصرة."}
+];
+const MODEL_ID = "onnx-community/Qwen2.5-0.5B-Instruct";
+let ai=null, busy=false, history=[];
+const $=id=>document.getElementById(id);
+const status=t=>$("status").textContent=t;
+function say(text,who="bot"){const d=document.createElement("div");d.className="msg "+who;d.textContent=text;$("log").appendChild(d);$("log").scrollTop=$("log").scrollHeight;return d;}
+$("load").onclick=async()=>{
+ if(ai)return; $("load").disabled=true;status("جارٍ تجهيز النموذج وتنزيل ملفاته. اترك التطبيق مفتوحاً...");
+ try{
+  ai=await pipeline("text-generation",MODEL_ID,{dtype:"q4",device:"wasm",progress_callback:(p)=>{
+   if(p.status==="progress"){$("pct").textContent=Math.round(p.progress||0)+"%";status("تنزيل: "+(p.file||"ملفات النموذج"));}
+   else if(p.status==="done"){status("اكتمل تنزيل أحد الملفات...");}
+   else if(p.status==="ready"){status("النموذج جاهز.");}
+  }});
+  status("النموذج جاهز. يمكنك الآن التحدث.");
+  $("load").textContent="النموذج جاهز";
+ }catch(e){ai=null;$("load").disabled=false;status("فشل تحميل النموذج: "+(e.message||e));}
+};
+function chooseAgent(text){const t=text.toLowerCase();if(t.includes("http://")||t.includes("https://")||t.includes("موقع")||t.includes("رابط"))return AGENT_CONFIG.find(a=>a.name==="فاحص المواقع")||AGENT_CONFIG[0];if(t.includes("حلل")||t.includes("تحليل"))return AGENT_CONFIG.find(a=>a.name==="المحلل")||AGENT_CONFIG[0];return AGENT_CONFIG[0];}
+async function ask(text,extra=""){
+ if(!ai){status("حمّل النموذج أولاً.");return}
+ if(busy)return;busy=true;$("send").disabled=true;$("scan").disabled=true;
+ say(text,"user");const bubble=say("يفكر...");const agent=chooseAgent(text);
+ try{
+  const msgs=[{role:"system",content:agent.instruction},...history.slice(-4),{role:"user",content:text+(extra?"\n\nمحتوى الصفحة المستخرج:\n"+extra.slice(0,7000):"")}];
+  const result=await ai(msgs,{max_new_tokens:128,do_sample:true,temperature:.7,top_p:.9,repetition_penalty:1.08});
+  let answer=result?.[0]?.generated_text;
+  if(Array.isArray(answer)){const last=answer[answer.length-1];answer=typeof last==="string"?last:last?.content;}
+  answer=String(answer||"لم ينتج النموذج رداً.");
+  bubble.textContent=answer;
+  history.push({role:"user",content:text},{role:"assistant",content:answer});
+ }catch(e){bubble.textContent="خطأ أثناء التوليد: "+(e.message||e);}
+ finally{busy=false;$("send").disabled=false;$("scan").disabled=false;}
+}
+$("send").onclick=()=>{const t=$("prompt").value.trim();if(t){$("prompt").value="";ask(t);}};
+$("prompt").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("send").click();}});
+$("scan").onclick=()=>{
+ const u=$("url").value.trim();if(!u)return status("أدخل رابط الموقع أولاً.");
+ if(!/^https?:\/\//i.test(u))return status("اكتب الرابط كاملاً مع https://");
+ status("جارٍ جلب صفحة الموقع...");
+ const id=Math.floor(Math.random()*1e9);
+ window._siteCallbacks=window._siteCallbacks||{};
+ window._siteCallbacks[id]=async html=>{
+  delete window._siteCallbacks[id];
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  doc.querySelectorAll("script,style,noscript,svg").forEach(x=>x.remove());
+  const title=doc.title||"بدون عنوان";
+  const body=(doc.body?.innerText||doc.body?.textContent||"").replace(/\s+/g," ").slice(0,10000);
+  status("تم جلب الصفحة. جارٍ تحليل محتواها بالنموذج...");
+  await ask("افحص هذا الموقع: "+u+"\nعنوان الصفحة: "+title,"العنوان: "+title+"\n"+body);
+ };
+ window.onSiteFetched=(callbackId,html)=>window._siteCallbacks?.[callbackId]?.(html);
+ if(window.DafanAndroid){window.DafanAndroid.inspectUrl(u,id);}else{status("ميزة فحص المواقع متاحة داخل تطبيق Android.");}
+};
+$("clear").onclick=()=>{history=[];$("log").innerHTML="";say("تم مسح سياق المحادثة.");};
+</script></body></html>
